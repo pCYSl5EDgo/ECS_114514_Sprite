@@ -9,9 +9,8 @@ Shader "Unlit/Indirect/Position"
     {
         Tags
         {
-            "Queue"="Transparent"
             "IgnoreProjector"="True"
-            "RenderType"="Transparent"
+            "RenderType"="Opaque"
         }
         Cull Off
         Lighting Off

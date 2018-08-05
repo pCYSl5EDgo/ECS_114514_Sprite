@@ -1,5 +1,7 @@
 /BuildIL2CPP/
 /Build/
 /.vscode/
+/obj/
+/.vs/
 /[Tt]emp/
 /[Ll]ibrary/

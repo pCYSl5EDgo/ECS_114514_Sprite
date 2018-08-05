@@ -9,9 +9,8 @@ Shader "Unlit/Indirect/Position-DoubleBuffer"
     {
         Tags
         {
-            "Queue"="Transparent"
             "IgnoreProjector"="True"
-            "RenderType"="Transparent"
+            "RenderType"="Opaque"
         }
         Cull Off
         Lighting Off
@@ -40,8 +39,6 @@ Shader "Unlit/Indirect/Position-DoubleBuffer"
                 float2 texcoord : TEXCOORD0;
             };
             
-
-
             sampler2D _MainTex;
             float4 _MainTex_ST;
             StructuredBuffer<float3> _PositionBuffer;
@@ -54,16 +51,14 @@ Shader "Unlit/Indirect/Position-DoubleBuffer"
                 float4x4 matrix_ = UNITY_MATRIX_I_V;
                 v.vertex.x *= lerp(1, -1, step(0, _HeadingBuffer[instanceID].x));
                 matrix_._14_24_34 = _PositionBuffer[instanceID];
-                v.vertex = mul(matrix_, v.vertex);
-                o.vertex = UnityObjectToClipPos(v.vertex);
+                o.vertex = UnityObjectToClipPos(mul(matrix_, v.vertex));
                 o.texcoord = TRANSFORM_TEX(v.texcoord, _MainTex);
                 return o;
             }
 
             fixed4 frag (v2f i) : SV_Target
             {
-                fixed4 col = tex2D(_MainTex, i.texcoord);
-                return col;
+                return tex2D(_MainTex, i.texcoord);
             }
             ENDCG
         }
