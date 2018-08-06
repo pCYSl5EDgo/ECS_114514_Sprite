@@ -14,8 +14,6 @@ namespace Wahren
     [UpdateAfter(typeof(UnityEngine.Experimental.PlayerLoop.PreLateUpdate.ParticleSystemBeginUpdateAll))]
     sealed class SpriteRenderSystem_DoubleBuffer : ComponentSystem
     {
-        // このSystemで描画するEntityだけを識別するためのISharedComponentData
-        public struct Tag : ISharedComponentData { }
         // IL2CPPでビルドする際には定数化したほうが圧倒的にいいらしい。
         // Marshal.SizeOf<Heading>の値を使う。
         const int Stride = sizeof(float) * 3;
@@ -39,7 +37,7 @@ namespace Wahren
         {
             argsBuffer = new ComputeBuffer(args.Length, sizeof(uint), ComputeBufferType.IndirectArguments);
             // ComponentType.Subtractive<T>()はTをArchetypeに持たないということを意味する。
-            g = GetComponentGroup(ComponentType.Subtractive<MeshCulledComponent>(), ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Heading>(), ComponentType.ReadOnly<SpriteRendererSharedComponent>(), ComponentType.ReadOnly<Tag>());
+            g = GetComponentGroup(ComponentType.Subtractive<MeshCulledComponent>(), ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Heading>(), ComponentType.ReadOnly<SpriteRendererSharedComponent>());
         }
         // MeshInstanceRendererSystemを真似て書いている。
         // あちらではMatrix4x4[]を用意して1023個ずつEntityをGraphics.DrawMeshInstancedしている。
@@ -72,7 +70,7 @@ namespace Wahren
             }
         }
 
-        void Render(int i, ref SpriteRendererSharedComponent sprite, ref ComponentDataArray<Position> positionDataArray, ref ComponentDataArray<Heading> headingDataArray)
+        unsafe void Render(int i, ref SpriteRendererSharedComponent sprite, ref ComponentDataArray<Position> positionDataArray, ref ComponentDataArray<Heading> headingDataArray)
         {
             var length = positionDataArray.Length;
             if (length == 0)
@@ -117,7 +115,7 @@ namespace Wahren
             {
                 // heading.Slice().SliceConvert<Position>();
                 // なりと書けば、PositionとHeadingのstruct layoutが同一であるため簡単に流用できる。
-                // メモリアロケーションが本当に気になるならばやってみるのもいいかもしれない。
+                // メモリアロケーションが本当に気になるならばやってみるのもいいかもしれない。 つ「早すぎた最適化」
                 headingDataArray.CopyTo(heading);
                 buffer.Item2.SetData(heading, 0, 0, length);
             }

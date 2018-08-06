@@ -54,18 +54,17 @@ namespace Wahren
             var collection = World.AllWorlds;
             for (int i = 0; i < WorldArchetypeTupleArray.Length; i++)
                 WorldArchetypeTupleArray[i].world = collection[i];
-            WorldArchetypeTupleArray[0].archetype = WorldArchetypeTupleArray[0].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRenderSystem.Tag), typeof(SpriteRendererSharedComponent));
-            WorldArchetypeTupleArray[1].archetype = WorldArchetypeTupleArray[1].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRenderSystem_DoubleBuffer.Tag), typeof(SpriteRendererSharedComponent));
+            WorldArchetypeTupleArray[0].archetype = WorldArchetypeTupleArray[0].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRendererSharedComponent));
+            WorldArchetypeTupleArray[1].archetype = WorldArchetypeTupleArray[1].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRendererSharedComponent));
             WorldArchetypeTupleArray[2].archetype = WorldArchetypeTupleArray[2].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(TransformMatrix), typeof(MeshInstanceRenderer));
-            WorldArchetypeTupleArray[0].world.GetExistingManager<SpriteRenderSystem>().Camera = mainCamera = GetComponent<Camera>();
-            WorldArchetypeTupleArray[1].world.GetExistingManager<SpriteRenderSystem_DoubleBuffer>().Camera = mainCamera;
+            WorldArchetypeTupleArray[1].world.GetExistingManager<SpriteRenderSystem_DoubleBuffer>().Camera = WorldArchetypeTupleArray[0].world.GetExistingManager<SpriteRenderSystem>().Camera = mainCamera = GetComponent<Camera>();
             InitializeRenderer();
             InitializeAngle();
             const int count = 114514;
             // 114514体のEntityを生成する。
-            SpawnEntities(count, WorldArchetypeTupleArray[0], renderer1);
-            SpawnEntities(count, WorldArchetypeTupleArray[1], renderer2);
-            SpawnEntities(count, WorldArchetypeTupleArray[2], renderer3);
+            SpawnEntities(count, ref WorldArchetypeTupleArray[0], renderer1);
+            SpawnEntities(count, ref WorldArchetypeTupleArray[1], renderer2);
+            SpawnEntities(count, ref WorldArchetypeTupleArray[2], renderer3);
             ChooseWorldToRun(currentMode);
         }
 
@@ -108,9 +107,8 @@ namespace Wahren
                 transform.position += deltaMove * Vector3.up;
             if (Input.GetKey(KeyCode.E))
                 transform.position += deltaMove * Vector3.down;
-            if (Input.GetMouseButtonDown(0))
-                if (Physics.Raycast(mainCamera.ScreenPointToRay(Input.mousePosition), out var hitInfo))
-                    transform.LookAt(hitInfo.point);
+            if (Input.GetMouseButtonDown(0) && Physics.Raycast(mainCamera.ScreenPointToRay(Input.mousePosition), out var hitInfo))
+                transform.LookAt(hitInfo.point);
             if (Input.GetKeyDown(KeyCode.Space))
             {
                 var MoveForwardSystem = World.Active.GetExistingManager<MoveForwardSystem>();
@@ -127,7 +125,7 @@ namespace Wahren
                 ChooseWorldToRun(2);
         }
 
-        void SpawnEntities<T>(int count, (World world, EntityArchetype archetype) pair, T[] array) where T : struct, ISharedComponentData
+        void SpawnEntities<T>(int count, ref (World world, EntityArchetype archetype) pair, T[] array) where T : struct, ISharedComponentData
         {
             var manager = pair.world.GetExistingManager<EntityManager>();
             var restLength = (count - UnitSprites.Length) / UnitSprites.Length;

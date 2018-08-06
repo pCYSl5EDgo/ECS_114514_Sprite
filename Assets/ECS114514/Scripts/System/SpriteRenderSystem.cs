@@ -14,7 +14,6 @@ namespace Wahren
     [UpdateAfter(typeof(UnityEngine.Experimental.PlayerLoop.PreLateUpdate.ParticleSystemBeginUpdateAll))]
     sealed class SpriteRenderSystem : ComponentSystem
     {
-        public struct Tag : ISharedComponentData { }
         public SpriteRenderSystem() : base() { }
         public SpriteRenderSystem(Camera camera) : base()
         {
@@ -43,7 +42,7 @@ namespace Wahren
         {
             argsBuffer = new ComputeBuffer(args.Length, sizeof(uint), ComputeBufferType.IndirectArguments);
             // ComponentType.Subtractive<T>()はTをArchetypeに持たないということを意味する。
-            g = GetComponentGroup(ComponentType.Subtractive<MeshCulledComponent>(), ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Heading>(), ComponentType.ReadOnly<SpriteRendererSharedComponent>(), ComponentType.ReadOnly<Tag>());
+            g = GetComponentGroup(ComponentType.Subtractive<MeshCulledComponent>(), ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Heading>(), ComponentType.ReadOnly<SpriteRendererSharedComponent>());
         }
         protected override void OnUpdate()
         {
