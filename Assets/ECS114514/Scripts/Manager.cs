@@ -3,15 +3,11 @@ using Unity.Transforms;
 using Unity.Collections;
 using Unity.Mathematics;
 using Unity.Rendering;
-using Unity.Jobs;
-using Unity.Burst;
 
 using UnityEngine;
 
 using System;
 using System.Linq;
-using System.Collections.Generic;
-using System.Reflection;
 
 namespace Wahren
 {
@@ -34,36 +30,57 @@ namespace Wahren
         // ビルボードな挙動はしない。
         [SerializeField] Shader Unlit_MeshInstanceRenderer;
 
-
+        // スプライトの種類数に制限は設けない。
         [SerializeField] Sprite[] UnitSprites;
         [SerializeField] [Range(0, 2)] int currentMode;
 
         Camera mainCamera;
 
         readonly Heading[] Angles = new Heading[360];
+        // 描画方法を三通り試すため、Worldを３つ用意する。アクセスの利便性のため配列にする。
+        // EntityManagerは各World固有の存在。
+        // EntityManagerは内部にArchetypeManagerを一つ持つ。
+        // EntityManager.CreateArchetypeでEntityArchetypeを作るならそれぞれのWorldで作る必要がある。
+        // よってWorldとEntityArchetypeのタプルで管理する方がよいだろう。
+        readonly (World world, EntityArchetype archetype)[] WorldArchetypeTupleArray = new(World, EntityArchetype)[3];
 
-        MoveForwardSystem MoveForwardSystem;
-        TransformSystem TransformSystem;
+        // SpriteRendererSharedComponentとMeshInstanceRendererが両方共にクラスならボクシングとかを気にする必要がなく、Array[]とかの形にして変数の個数を減らせたのだが。
         SpriteRendererSharedComponent[] renderer1;
         SpriteRendererSharedComponent[] renderer2;
         MeshInstanceRenderer[] renderer3;
-        ComponentType[][] ComponentTypeArray = new ComponentType[3][];
-        ComponentSystem[] RenderingSystemArray = new ComponentSystem[3];
-
-        bool isNowStopMoveSystem = false;
 
         void Awake()
         {
-            mainCamera = GetComponent<Camera>();
-            var active = World.Active;
-            TransformSystem = active.GetExistingManager<TransformSystem>();
-            MoveForwardSystem = active.GetExistingManager<MoveForwardSystem>();
-            ComponentTypeArray[0] = new ComponentType[] { typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRenderSystem.Tag) };
-            ComponentTypeArray[1] = new ComponentType[] { typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRenderSystem_DoubleBuffer.Tag) };
-            ComponentTypeArray[2] = new ComponentType[] { typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(TransformMatrix) };
-            RenderingSystemArray[0] = active.GetExistingManager<SpriteRenderSystem>();
-            RenderingSystemArray[1] = active.GetExistingManager<SpriteRenderSystem_DoubleBuffer>();
-            RenderingSystemArray[2] = active.GetExistingManager<MeshInstanceRendererSystem>();
+            var collection = World.AllWorlds;
+            for (int i = 0; i < WorldArchetypeTupleArray.Length; i++)
+                WorldArchetypeTupleArray[i].world = collection[i];
+            WorldArchetypeTupleArray[0].archetype = WorldArchetypeTupleArray[0].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRenderSystem.Tag), typeof(SpriteRendererSharedComponent));
+            WorldArchetypeTupleArray[1].archetype = WorldArchetypeTupleArray[1].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(SpriteRenderSystem_DoubleBuffer.Tag), typeof(SpriteRendererSharedComponent));
+            WorldArchetypeTupleArray[2].archetype = WorldArchetypeTupleArray[2].world.GetExistingManager<EntityManager>().CreateArchetype(typeof(Position), typeof(Heading), typeof(MoveSpeed), typeof(MoveForward), typeof(TransformMatrix), typeof(MeshInstanceRenderer));
+            WorldArchetypeTupleArray[0].world.GetExistingManager<SpriteRenderSystem>().Camera = mainCamera = GetComponent<Camera>();
+            WorldArchetypeTupleArray[1].world.GetExistingManager<SpriteRenderSystem_DoubleBuffer>().Camera = mainCamera;
+            InitializeRenderer();
+            InitializeAngle();
+            const int count = 114514;
+            // 114514体のEntityを生成する。
+            SpawnEntities(count, WorldArchetypeTupleArray[0], renderer1);
+            SpawnEntities(count, WorldArchetypeTupleArray[1], renderer2);
+            SpawnEntities(count, WorldArchetypeTupleArray[2], renderer3);
+            ChooseWorldToRun(currentMode);
+        }
+
+        private void ChooseWorldToRun(int mode)
+        {
+            currentMode = mode;
+            // World.Activeに指定していないWorldは勝手に動作する。Enabled = falseにしてやらないと普通に動作してレンダリングとかする。
+            for (int i = 0; i < WorldArchetypeTupleArray.Length; i++)
+                if (i != currentMode)
+                    StopWorld(WorldArchetypeTupleArray[i].world);
+            RunWorld(World.Active = WorldArchetypeTupleArray[currentMode].world);
+        }
+
+        void InitializeRenderer()
+        {
             renderer1 = new SpriteRendererSharedComponent[UnitSprites.Length];
             for (int i = 0; i < UnitSprites.Length; i++)
                 renderer1[i] = new SpriteRendererSharedComponent(Unlit_Position, UnitSprites[i]);
@@ -73,108 +90,60 @@ namespace Wahren
             renderer3 = new MeshInstanceRenderer[UnitSprites.Length];
             for (int i = 0; i < UnitSprites.Length; i++)
                 renderer3[i] = CreateMeshInstanceRenderer(UnitSprites[i]);
-            var BoundRefecltSystem = active.GetOrCreateManager<BoundReflectSystem>();
-            BoundRefecltSystem.Region = new float4(-50, -50, 50, 50);
-            InitializeAngle();
-            switch (currentMode)
-            {
-                case 0:
-                    TransformSystem.Enabled = false;
-                    Spawn114514Entities(renderer1, ComponentTypeArray[currentMode]);
-                    break;
-                case 1:
-                    TransformSystem.Enabled = false;
-                    Spawn114514Entities(renderer2, ComponentTypeArray[currentMode]);
-                    break;
-                case 2:
-                    Spawn114514Entities(renderer3, ComponentTypeArray[currentMode]);
-                    break;
-            }
         }
-
 
         void Update()
         {
-            var deltaTime = Time.deltaTime * 10;
+            var deltaMove = Time.deltaTime * 10;
             var transform = this.transform;
-            var manager = World.Active.GetExistingManager<EntityManager>();
             if (Input.GetKey(KeyCode.W))
-                transform.position += deltaTime * Vector3.forward;
+                transform.position += deltaMove * Vector3.forward;
             if (Input.GetKey(KeyCode.A))
-                transform.position += deltaTime * Vector3.left;
+                transform.position += deltaMove * Vector3.left;
             if (Input.GetKey(KeyCode.S))
-                transform.position += deltaTime * Vector3.back;
+                transform.position += deltaMove * Vector3.back;
             if (Input.GetKey(KeyCode.D))
-                transform.position += deltaTime * Vector3.right;
+                transform.position += deltaMove * Vector3.right;
             if (Input.GetKey(KeyCode.Q))
-                transform.position += deltaTime * Vector3.up;
+                transform.position += deltaMove * Vector3.up;
             if (Input.GetKey(KeyCode.E))
-                transform.position += deltaTime * Vector3.down;
+                transform.position += deltaMove * Vector3.down;
+            if (Input.GetMouseButtonDown(0))
+                if (Physics.Raycast(mainCamera.ScreenPointToRay(Input.mousePosition), out var hitInfo))
+                    transform.LookAt(hitInfo.point);
             if (Input.GetKeyDown(KeyCode.Space))
             {
-                if (isNowStopMoveSystem)
-                    MoveForwardSystem.Enabled = true;
-                else
-                    MoveForwardSystem.Enabled = false;
-                isNowStopMoveSystem = !isNowStopMoveSystem;
+                var MoveForwardSystem = World.Active.GetExistingManager<MoveForwardSystem>();
+                MoveForwardSystem.Enabled = !MoveForwardSystem.Enabled;
             }
             if (Input.GetKey(KeyCode.Escape))
                 Application.Quit();
             // 描画方法の切り替え。
-            if (Input.GetKey(KeyCode.Alpha0) && currentMode != 0)
-            {
-                currentMode = 0;
-                // 不要なシステムはEnabledをfalseにする。
-                TransformSystem.Enabled = false;
-                manager.DestroyEntity(manager.GetAllEntities());
-                RenderingSystemArray[0].Enabled = true;
-                RenderingSystemArray[1].Enabled = false;
-                RenderingSystemArray[2].Enabled = false;
-                Spawn114514Entities(renderer1, ComponentTypeArray[currentMode]);
-            }
-            else if (Input.GetKey(KeyCode.Alpha1) && currentMode != 1)
-            {
-                currentMode = 1;
-                TransformSystem.Enabled = false;
-                manager.DestroyEntity(manager.GetAllEntities());
-                RenderingSystemArray[0].Enabled = false;
-                RenderingSystemArray[1].Enabled = true;
-                RenderingSystemArray[2].Enabled = false;
-                Spawn114514Entities(renderer2, ComponentTypeArray[currentMode]);
-            }
-            else if (Input.GetKey(KeyCode.Alpha2) && currentMode != 2)
-            {
-                currentMode = 2;
-                TransformSystem.Enabled = true;
-                manager.DestroyEntity(manager.GetAllEntities());
-                RenderingSystemArray[0].Enabled = false;
-                RenderingSystemArray[1].Enabled = false;
-                RenderingSystemArray[2].Enabled = true;
-                Spawn114514Entities(renderer3, ComponentTypeArray[currentMode]);
-            }
+            if (Input.GetKeyDown(KeyCode.Alpha0) && currentMode != 0)
+                ChooseWorldToRun(0);
+            else if (Input.GetKeyDown(KeyCode.Alpha1) && currentMode != 1)
+                ChooseWorldToRun(1);
+            else if (Input.GetKeyDown(KeyCode.Alpha2) && currentMode != 2)
+                ChooseWorldToRun(2);
         }
 
-        // 114514体のEntityを生成する。
-        void Spawn114514Entities<T>(T[] array, params ComponentType[] archetypes) where T : struct, ISharedComponentData
+        void SpawnEntities<T>(int count, (World world, EntityArchetype archetype) pair, T[] array) where T : struct, ISharedComponentData
         {
-            var active = World.Active;
-            var manager = active.GetExistingManager<EntityManager>();
-            EntityArchetype archetype;
+            var manager = pair.world.GetExistingManager<EntityManager>();
+            var restLength = (count - UnitSprites.Length) / UnitSprites.Length;
+            var srcEntities = new NativeArray<Entity>(UnitSprites.Length, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            var firstEntities = new NativeArray<Entity>(count - (restLength + 1) * UnitSprites.Length + restLength, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            var restEntities = new NativeArray<Entity>(restLength, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            try
             {
-                var tmp = new ComponentType[(archetypes?.Length ?? 0) + 1];
-                if (archetypes != null && archetypes.Length != 0)
-                    Array.Copy(archetypes, tmp, archetypes.Length);
-                tmp[tmp.Length - 1] = typeof(T);
-                archetype = manager.CreateArchetype(tmp);
+                InitializeSourceEntities(manager, ref pair.archetype, ref srcEntities, array);
+                InitializeEntities(manager, ref srcEntities, array, ref firstEntities, ref restEntities);
             }
-            var restLength = (114514 - UnitSprites.Length) / UnitSprites.Length;
-            using (var srcEntities = new NativeArray<Entity>(UnitSprites.Length, Allocator.Temp, NativeArrayOptions.UninitializedMemory))
+            finally
             {
-                var entitiesArray = new NativeArray<Entity>[UnitSprites.Length];
-                InitializeSourceEntities(manager, archetype, srcEntities, array);
-                InitializeEntitiesArray(entitiesArray);
-                InitializeEntities(manager, srcEntities, array, entitiesArray);
-                DisposeEntitiesArray(entitiesArray);
+                srcEntities.Dispose();
+                firstEntities.Dispose();
+                restEntities.Dispose();
             }
         }
 
@@ -190,7 +159,9 @@ namespace Wahren
             }
         }
 
-        void InitializeSourceEntities<T>(EntityManager manager, EntityArchetype archetype, NativeArray<Entity> src, T[] shared) where T : struct, ISharedComponentData
+        // NativeArray<T>の構造体のサイズは8byte(void*)+4byte(int)+4byte(Allocator)=16byteであると思われる。
+        // この程度ならref使わなくてもいいか？　呼び出し回数も少ないことであるし。
+        void InitializeSourceEntities<T>(EntityManager manager, ref EntityArchetype archetype, ref NativeArray<Entity> src, T[] shared) where T : struct, ISharedComponentData
         {
             manager.CreateEntity(archetype, src);
             for (int i = 0; i < src.Length; i++)
@@ -203,36 +174,46 @@ namespace Wahren
             }
         }
 
-        void InitializeEntitiesArray(NativeArray<Entity>[] entitiesArray)
-        {
-            const int V = 114514;
-            var restLength = (V - UnitSprites.Length) / UnitSprites.Length;
-            entitiesArray[0] = new NativeArray<Entity>(V - UnitSprites.Length - (restLength * (UnitSprites.Length - 1)), Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-            for (int i = 1; i < UnitSprites.Length; i++)
-                entitiesArray[i] = new NativeArray<Entity>(restLength, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
-        }
-
-        void InitializeEntities<T>(EntityManager manager, NativeArray<Entity> srcEntities, T[] array, NativeArray<Entity>[] entitiesArray) where T : struct, ISharedComponentData
+        void InitializeEntities<T>(EntityManager manager, ref NativeArray<Entity> srcEntities, T[] array, ref NativeArray<Entity> firstEntities, ref NativeArray<Entity> restEntities) where T : struct, ISharedComponentData
         {
             if (array == null) throw new ArgumentNullException();
-            for (int i = 0; i < srcEntities.Length; i++)
+            // Instantiateした場合はISharedComponentDataが最初から適切に設定されているためChunkについて頭を悩ませなくて良い。
+            manager.Instantiate(srcEntities[0], firstEntities);
+            for (int i = 0; i < firstEntities.Length; i++)
             {
-                var outputEntities = entitiesArray[i];
-                // Instantiateした場合はISharedComponentDataが最初から適切に設定されているためChunkについて頭を悩ませなくて良い。
-                manager.Instantiate(srcEntities[i], outputEntities);
-                for (int j = 0; j < outputEntities.Length; j++)
+                var entity = firstEntities[i];
+                manager.SetComponentData(entity, new MoveSpeed { speed = UnityEngine.Random.Range(0.1f, 2f) });
+                manager.SetComponentData(entity, Angles[i % 360]);
+            }
+            for (int i = 1; i < srcEntities.Length; i++)
+            {
+                manager.Instantiate(srcEntities[i], restEntities);
+                for (int j = 0; j < restEntities.Length; j++)
                 {
-                    var entity = outputEntities[j];
+                    var entity = restEntities[j];
                     manager.SetComponentData(entity, new MoveSpeed { speed = UnityEngine.Random.Range(0.1f, 2f) });
                     manager.SetComponentData(entity, Angles[j % 360]);
                 }
             }
         }
 
-        void DisposeEntitiesArray(NativeArray<Entity>[] entitiesArray)
+        void StopWorld(World world)
         {
-            for (int i = 0; i < entitiesArray.Length; i++)
-                entitiesArray[i].Dispose();
+            foreach (var item in world.BehaviourManagers)
+            {
+                var system = item as ComponentSystemBase;
+                if (system == null) continue;
+                system.Enabled = false;
+            }
+        }
+        void RunWorld(World world)
+        {
+            foreach (var item in world.BehaviourManagers)
+            {
+                var system = item as ComponentSystemBase;
+                if (system == null) continue;
+                system.Enabled = true;
+            }
         }
 
 
