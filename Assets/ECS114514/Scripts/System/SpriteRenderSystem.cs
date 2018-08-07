@@ -28,7 +28,6 @@ namespace Wahren
         public Bounds Bounds = new Bounds(Vector3.zero, Vector3.one * 300);
         public Camera Camera;
         uint[] args = new uint[5];
-        ComputeBuffer argsBuffer;
 
         // ECS標準の[Inject]で注入やらなんやらは実際ComponentGroupをやりくりすることで行っているそうだ。
         ComponentGroup g;
@@ -37,12 +36,12 @@ namespace Wahren
         readonly List<SpriteRendererSharedComponent> sharedComponents = new List<SpriteRendererSharedComponent>();
         readonly List<int> sharedIndices = new List<int>();
         readonly Dictionary<int, ComputeBuffer> buffers = new Dictionary<int, ComputeBuffer>();
+        readonly List<ComputeBuffer> argsList = new List<ComputeBuffer>();
 
         protected override void OnCreateManager(int capacity)
         {
-            argsBuffer = new ComputeBuffer(args.Length, sizeof(uint), ComputeBufferType.IndirectArguments);
             // ComponentType.Subtractive<T>()はTをArchetypeに持たないということを意味する。
-            g = GetComponentGroup(ComponentType.Subtractive<MeshCulledComponent>(), ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Heading>(), ComponentType.ReadOnly<SpriteRendererSharedComponent>());
+            g = GetComponentGroup(ComponentType.ReadOnly<Position>(), ComponentType.ReadOnly<Heading>(), ComponentType.ReadOnly<SpriteRendererSharedComponent>());
         }
         protected override void OnUpdate()
         {
@@ -53,17 +52,24 @@ namespace Wahren
             // その際にTransformMatrixをむりくりMatrix4x4に読み替えたりコピーしたりしているようなので多分遅い。
             // あと、preview8のコメント文でDarwMeshInstancedの引数にNativeArray/Sliceが使えないことを嘆いている。
             EntityManager.GetAllUniqueSharedComponentDatas(sharedComponents, sharedIndices);
+            IncreaseArgsList(sharedComponents.Count);
             using (var filter = g.CreateForEachFilter(sharedComponents))
-            {
                 for (int i = 1; i < sharedComponents.Count; i++)
                 {
                     var positionDataArray = g.GetComponentDataArray<Position>(filter, i);
                     var headingDataArray = g.GetComponentDataArray<Heading>(filter, i);
                     Render(i, ref positionDataArray, ref headingDataArray);
                 }
-            }
         }
 
+        void IncreaseArgsList(int count)
+        {
+            if (argsList.Count >= count) return;
+            if (argsList.Capacity < count)
+                argsList.Capacity = count;
+            while (argsList.Count < count)
+                argsList.Add(new ComputeBuffer(args.Length, sizeof(uint), ComputeBufferType.IndirectArguments));
+        }
         void Render(int i, ref ComponentDataArray<Position> positionDataArray, ref ComponentDataArray<Heading> headingDataArray)
         {
             var length = positionDataArray.Length;
@@ -86,7 +92,7 @@ namespace Wahren
             args[0] = sprite.mesh.GetIndexCount(0);
             // 何体描画するか
             args[1] = (uint)length;
-            argsBuffer.SetData(args, 0, 0, 2);
+            argsList[i].SetData(args, 0, 0, 2);
             // 時代はSpan<T>、ただしUnityの場合はNativeSlice<T>
             // Allocator.Persistentにしてクラスフィールドにしたほうがいいのかどうなのかいまいちわからない。
             using (var position = new NativeArray<Position>(length, Allocator.Temp, NativeArrayOptions.UninitializedMemory))
@@ -106,19 +112,23 @@ namespace Wahren
                 positionHeading.Dispose();
             }
             // 影を描画しないしさせない鉄の意志。
-            Graphics.DrawMeshInstancedIndirect(sprite.mesh, 0, sprite.material, Bounds, argsBuffer, 0, null, ShadowCastingMode.Off, false, 0, Camera, LightProbeUsage.Off, null);
+            Graphics.DrawMeshInstancedIndirect(sprite.mesh, 0, sprite.material, Bounds, argsList[i], 0, null, ShadowCastingMode.Off, false, 0, Camera, LightProbeUsage.Off, null);
         }
 
         protected override void OnStopRunning()
         {
+            for (int i = 0; i < argsList.Count; i++)
+                argsList[i].Dispose();
+            argsList.Clear();
             foreach (var buffer in buffers.Values)
                 buffer.Release();
             buffers.Clear();
         }
         protected override void OnDestroyManager()
         {
-            if (!object.ReferenceEquals(argsBuffer, null))
-                argsBuffer.Release();
+            for (int i = 0; i < argsList.Count; i++)
+                argsList[i].Dispose();
+            argsList.Clear();
             foreach (var buffer in buffers.Values)
                 buffer.Release();
             buffers.Clear();
