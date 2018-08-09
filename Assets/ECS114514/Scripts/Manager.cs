@@ -18,6 +18,7 @@ namespace Wahren
         // Unlitシェーダー、シェーダー内部でビルボードの挙動を取らせている。
         // 移動方向(Heading.x)に応じて左右を反転させる。
         // Meshが一部描画されないのはなぜなのか……
+        // （A）：DrawMeshInstancedIndirectを複数回同一フレームで呼び出す際に引数として渡したComputeBufferが共有されていたから！
         [SerializeField] Shader Unlit_Position;
 
         // Unlitシェーダー、シェーダー内部でビルボードの挙動を取らせている。
